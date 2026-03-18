@@ -120,6 +120,10 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    env:
+      CC: gcc-11
+      CXX: g++-11
+      GCOV: gcov-11
 
     steps:
     - uses: actions/checkout@v3
@@ -133,6 +137,7 @@ jobs:
       run: |
         cmake -B build-coverage \
           -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_C_COMPILER=gcc-11 \
           -DCMAKE_CXX_COMPILER=g++-11 \
           -DCMAKE_CXX_FLAGS="--coverage" \
           -DTOKEN_BUCKET_BUILD_TESTS=ON
@@ -145,7 +150,7 @@ jobs:
 
     - name: Generate coverage report
       run: |
-        lcov --capture --directory build-coverage --output-file coverage.info
+        lcov --capture --gcov-tool "$GCOV" --directory build-coverage --output-file coverage.info
         lcov --remove coverage.info '*/googletest/*' --output-file coverage.info
         lcov --list coverage.info
 
