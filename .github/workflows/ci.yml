@@ -2,160 +2,228 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        compiler: [gcc, clang]
-        exclude:
-          # Windows doesn't have gcc in the standard environment
-          - os: windows-latest
-            compiler: gcc
-
-    runs-on: ${{ matrix.os }}
+  linux-gcc:
+    name: Linux GCC 11
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-11
+      CXX: g++-11
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-11 g++-11
 
-    - name: Install dependencies (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew install cmake
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON \
+            -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
 
-    - name: Set up compiler (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        if [ "${{ matrix.compiler }}" = "gcc" ]; then
-          sudo apt-get install -y gcc-11 g++-11
-          echo "CC=gcc-11" >> $GITHUB_ENV
-          echo "CXX=g++-11" >> $GITHUB_ENV
-        else
-          sudo apt-get install -y clang-14
-          echo "CC=clang-14" >> $GITHUB_ENV
-          echo "CXX=clang++-14" >> $GITHUB_ENV
-        fi
+      - name: Build
+        run: cmake --build build --parallel
 
-    - name: Set up compiler (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        if [ "${{ matrix.compiler }}" = "clang" ]; then
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-        else
-          echo "CC=gcc" >> $GITHUB_ENV
-          echo "CXX=g++" >> $GITHUB_ENV
-        fi
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
 
-    - name: Configure CMake
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DTOKEN_BUCKET_BUILD_TESTS=ON \
-          -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
+      - name: Run example
+        run: ./build/example_basic_usage
 
-    - name: Build
-      run: cmake --build build --config Release
-
-    - name: Run tests
-      run: |
-        cd build
-        ctest --output-on-failure
-
-    - name: Run example
-      run: ./build/example_basic_usage
-      if: runner.os != 'Windows'
-
-  code-quality:
-    runs-on: ubuntu-latest
+  linux-clang:
+    name: Linux Clang 14
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-14
+      CXX: clang++-14
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Install clang-format
-      run: sudo apt-get install -y clang-format-14
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-14
 
-    - name: Check code formatting
-      run: |
-        # Check if files are properly formatted
-        find include tests examples -name "*.hpp" -o -name "*.cpp" | xargs clang-format-14 -i
-        git diff --exit-code || (echo "Code not formatted. Run: clang-format-14 -i <files>" && exit 1)
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON \
+            -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run example
+        run: ./build/example_basic_usage
+
+  macos-clang:
+    name: macOS Clang
+    runs-on: macos-14
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON \
+            -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run example
+        run: ./build/example_basic_usage
+
+  windows-msvc:
+    name: Windows MSVC
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -G "Visual Studio 17 2022" \
+            -A x64 \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON \
+            -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel
+
+      - name: Run tests
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  formatting:
+    name: Formatting
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-14
+
+      - name: Check formatting
+        run: |
+          find include tests examples \( -name "*.hpp" -o -name "*.cpp" \) -print0 | xargs -0 clang-format-14 -i
+          git diff --exit-code
 
   sanitizers:
-    runs-on: ubuntu-latest
+    name: Sanitizers
+    runs-on: ubuntu-22.04
+    env:
+      CC: clang-14
+      CXX: clang++-14
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake clang-14 llvm-14
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-14 lld-14
 
-    - name: Build with ASAN
-      run: |
-        cmake -B build-asan \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_CXX_COMPILER=clang++-14 \
-          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined" \
-          -DTOKEN_BUCKET_BUILD_TESTS=ON
-        cmake --build build-asan
+      - name: Configure
+        run: |
+          cmake -S . -B build-asan \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON
 
-    - name: Run tests with ASAN
-      run: |
-        cd build-asan
-        ctest --output-on-failure
-      env:
-        ASAN_OPTIONS: "detect_leaks=1"
+      - name: Build
+        run: cmake --build build-asan --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build-asan --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
 
   coverage:
-    runs-on: ubuntu-latest
+    name: Coverage
+    runs-on: ubuntu-22.04
     env:
       CC: gcc-11
       CXX: g++-11
       GCOV: gcov-11
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake gcc-11 g++-11 lcov
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-11 g++-11 lcov
 
-    - name: Build with coverage
-      run: |
-        cmake -B build-coverage \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_C_COMPILER=gcc-11 \
-          -DCMAKE_CXX_COMPILER=g++-11 \
-          -DCMAKE_CXX_FLAGS="--coverage" \
-          -DTOKEN_BUCKET_BUILD_TESTS=ON
-        cmake --build build-coverage
+      - name: Configure
+        run: |
+          cmake -S . -B build-coverage \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_CXX_FLAGS="--coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
+            -DTOKEN_BUCKET_BUILD_TESTS=ON
 
-    - name: Run tests
-      run: |
-        cd build-coverage
-        ctest --output-on-failure
+      - name: Build
+        run: cmake --build build-coverage --parallel
 
-    - name: Generate coverage report
-      run: |
-        lcov --capture --gcov-tool "$GCOV" --directory build-coverage --output-file coverage.info
-        lcov --remove coverage.info '*/googletest/*' --output-file coverage.info
-        lcov --list coverage.info
+      - name: Run tests
+        run: ctest --test-dir build-coverage --output-on-failure
 
-    - name: Upload to codecov
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage.info
-        fail_ci_if_error: false
+      - name: Generate coverage report
+        run: |
+          lcov --capture --gcov-tool "$GCOV" --ignore-errors mismatch --directory build-coverage --output-file coverage.info
+          lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/googletest/*' --output-file coverage.info
+          lcov --list coverage.info
+
+      - name: Upload to codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.info
+          fail_ci_if_error: false
