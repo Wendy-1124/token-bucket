@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        compiler: [gcc, clang]
+        exclude:
+          # Windows doesn't have gcc in the standard environment
+          - os: windows-latest
+            compiler: gcc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake
+
+    - name: Set up compiler (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          sudo apt-get install -y gcc-11 g++-11
+          echo "CC=gcc-11" >> $GITHUB_ENV
+          echo "CXX=g++-11" >> $GITHUB_ENV
+        else
+          sudo apt-get install -y clang-14
+          echo "CC=clang-14" >> $GITHUB_ENV
+          echo "CXX=clang++-14" >> $GITHUB_ENV
+        fi
+
+    - name: Set up compiler (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        if [ "${{ matrix.compiler }}" = "clang" ]; then
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+        else
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+        fi
+
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DTOKEN_BUCKET_BUILD_TESTS=ON \
+          -DTOKEN_BUCKET_BUILD_EXAMPLES=ON
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Run tests
+      run: |
+        cd build
+        ctest --output-on-failure
+
+    - name: Run example
+      run: ./build/example_basic_usage
+      if: runner.os != 'Windows'
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install clang-format
+      run: sudo apt-get install -y clang-format-14
+
+    - name: Check code formatting
+      run: |
+        # Check if files are properly formatted
+        find include tests examples -name "*.hpp" -o -name "*.cpp" | xargs clang-format-14 -i
+        git diff --exit-code || (echo "Code not formatted. Run: clang-format-14 -i <files>" && exit 1)
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake clang-14 llvm-14
+
+    - name: Build with ASAN
+      run: |
+        cmake -B build-asan \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_COMPILER=clang++-14 \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined" \
+          -DTOKEN_BUCKET_BUILD_TESTS=ON
+        cmake --build build-asan
+
+    - name: Run tests with ASAN
+      run: |
+        cd build-asan
+        ctest --output-on-failure
+      env:
+        ASAN_OPTIONS: "detect_leaks=1"
+
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake gcc-11 g++-11 lcov
+
+    - name: Build with coverage
+      run: |
+        cmake -B build-coverage \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DCMAKE_CXX_FLAGS="--coverage" \
+          -DTOKEN_BUCKET_BUILD_TESTS=ON
+        cmake --build build-coverage
+
+    - name: Run tests
+      run: |
+        cd build-coverage
+        ctest --output-on-failure
+
+    - name: Generate coverage report
+      run: |
+        lcov --capture --directory build-coverage --output-file coverage.info
+        lcov --remove coverage.info '*/googletest/*' --output-file coverage.info
+        lcov --list coverage.info
+
+    - name: Upload to codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.info
+        fail_ci_if_error: false
